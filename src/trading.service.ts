@@ -38,17 +38,32 @@ export class TradingService implements OnModuleInit {
   }
 
   async onModuleInit() {
+    this.logger.log('🔍 DIAGNÓSTICO DE INICIO:');
+    this.logger.log(`> DB_HOST: ${process.env.DB_HOST}`);
+    this.logger.log(`> DB_USER: ${process.env.DB_USER}`);
+    this.logger.log(`> DB_NAME: ${process.env.DB_NAME}`);
+    this.logger.log(
+      `> TG_TOKEN: ${process.env.TELEGRAM_TOKEN ? '✅ Cargado' : '❌ VACÍO'}`,
+    );
+
     try {
       this.initBinance();
-      await this.db.connect();
 
-      // CONFIGURAR COMANDOS DE TELEGRAM
+      // IMPORTANTE: Arrancamos el bot de Telegram ANTES que la DB
+      // Así, si la DB falla, el bot al menos puede responderte un error.
       this.configurarComandos();
-      this.bot.launch(); // Iniciamos la escucha de mensajes
+      this.bot.launch();
+      this.logger.log('✅ Bot de Telegram lanzado (Polling activo)');
 
-      this.logger.log('✅ Bot Interactivo Iniciado (/status disponible)');
+      this.logger.log('⏳ Intentando conectar a la base de datos...');
+      await this.db.connect();
+      this.logger.log('✅ DB Conectada con éxito');
+
+      // Ver saldo inicial
+      await this.obtenerSaldoReal();
     } catch (err) {
-      this.logger.error(`❌ Error en inicio: ${err.message}`);
+      this.logger.error(`❌ Error crítico en inicio: ${err.message}`);
+      // No cortamos el flujo aquí para que el bot de TG siga vivo si pudo arrancar
     }
   }
 

@@ -4,7 +4,7 @@ services:
     container_name: bot_trading_prod
     restart: always
     environment:
-      - DB_HOST=postgres_prod # Usamos el nombre del contenedor de la DB
+      - DB_HOST=postgres_prod # Volvemos al NOMBRE, ahora sí va a funcionar
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
@@ -12,14 +12,11 @@ services:
       - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    # Forzamos a que use ÚNICAMENTE esta red
     networks:
-      - mi_red_compartida
-    deploy:
-      resources:
-        limits:
-          memory: 256M
+      - red_prod
 
 networks:
-  mi_red_compartida:
+  red_prod:
     external: true
-    name: telegram-bot_default
+    name: telegram-bot_default # El nombre que vimos en tu 'docker network ls'
