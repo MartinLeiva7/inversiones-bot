@@ -285,4 +285,59 @@ export class TradingService implements OnModuleInit {
       this.logger.error(e.message);
     }
   }
+
+  // --- MÉTODOS AUXILIARES PARA EL RESUMEN ---
+
+  async obtenerPrecioActualBTC(): Promise<number> {
+    const ticker = await this.binance.symbolPriceTicker({ symbol: 'BTCUSDT' });
+    // @ts-expect-error (Binance connector a veces devuelve array o objeto dependiendo de la versión)
+    return parseFloat(ticker.price || ticker[0].price);
+  }
+
+  async calcularRSICuandoSea(): Promise<number> {
+    const candles = await this.binance.klineCandlestickData(
+      'BTCUSDT',
+      Interval['1h'],
+      { limit: 100 },
+    );
+    const prices = candles.map((c) => parseFloat(c[4] as string));
+    const rsiValues = RSI.calculate({ values: prices, period: 14 });
+    return rsiValues[rsiValues.length - 1];
+  }
+
+  // --- EL CRON DEL RESUMEN DIARIO ---
+
+  @Cron('0 9 * * *', {
+    name: 'resumen_diario',
+    timeZone: 'America/Argentina/Buenos_Aires',
+  })
+  async enviarResumenDiario() {
+    this.logger.log('📊 Generando resumen diario automático...');
+
+    try {
+      const precio = await this.obtenerPrecioActualBTC();
+      const rsi = await this.calcularRSICuandoSea();
+      const saldo = await this.obtenerSaldoUSDT();
+
+      const mensaje = `📅 *RESUMEN DIARIO* 📊
+-------------------------
+💰 *Saldo Spot:* ${saldo.toFixed(2)} USDT
+₿ *Precio BTC:* $${precio.toLocaleString()}
+📈 *RSI Actual:* ${rsi.toFixed(2)}
+
+${rsi < 40 ? '⚠️ ¡RSI Bajo! Cerca de zona de compra.' : '✅ Mercado estable.'}
+-------------------------
+_Seguimos vigilando 24/7 desde Catamarca_ 🛡️`;
+
+      await this.bot.telegram.sendMessage(
+        process.env.TELEGRAM_CHAT_ID || '',
+        mensaje,
+        { parse_mode: 'Markdown' },
+      );
+
+      this.logger.log('✅ Resumen diario enviado a Telegram');
+    } catch (error) {
+      this.logger.error(`❌ Error en resumen diario: ${error.message}`);
+    }
+  }
 }
