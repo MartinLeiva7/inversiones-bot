@@ -1,98 +1,68 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🤖 Inversiones Bot - Trading Automático en Binance
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Un bot de trading automático construido con **NestJS** y **TypeScript**. Este bot opera en Binance con el par `BTC/USDT` utilizando la estrategia del indicador **RSI (Relative Strength Index)** y reporta toda su actividad a través de **Telegram**. Además, persiste el registro de las operaciones en una base de datos **PostgreSQL**.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 🚀 Funcionalidades Principales
 
-## Description
+### 📈 Estrategia de Trading (RSI)
+- Analiza periódicamente el mercado (por defecto cada 1 hora) utilizando velas de temporalidad de 1H para el par **BTC/USDT**.
+- **Señal de Compra**: Si no hay una operación abierta en el momento y el valor del **RSI es menor a 35** (indicando sobreventa), el bot ejecuta una orden de compra a precio de mercado (`MARKET`) utilizando un monto fijo de **15 USDT**.
+- **Señal de Venta**: Si existe una posición abierta, el bot la venderá en su totalidad a valor de mercado si se cumple alguna de estas dos condiciones:
+  - El **RSI supera 65** (indicando sobrecompra).
+  - La **ganancia neta es igual o mayor al 2.0%** (Take profit por porcentaje).
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+### 📱 Integración con Telegram (Comandos)
+El bot se comunica en tiempo real con un chat de un usuario/grupo de Telegram. Te permite interactuar y consultar el estado de tu cuenta mediante los siguientes comandos:
+- `/status`: Muestra un panel de resumen con tu saldo actual en Spot (USDT), la cantidad de operaciones cerradas históricamente, la ganancia total acumulada y el estado de la posición actual (ya sea una orden de compra activa con su precio de entrada, o simplemente en espera de una oportunidad).
+- `/rsi`: Consulta bajo demanda las velas de Binance y te devuelve el valor exacto del RSI de BTC en la temporalidad de 1H en ese instante.
 
-## Project setup
+### 📊 Reportes y Notificaciones Automáticas
+- **Notificaciones de Operación**: Genera alertas inmediatas a Telegram cada vez que se ejecuta una compra o una venta con éxito, informando el precio de ejecución, el monto y la ganancia obtenida en caso de venta.
+- **Resumen Diario Automático**: Todos los días a las **09:00 AM** (Hora Argentina), el bot recaba información del mercado y tu billetera, enviando un resumen que incluye:
+  - Tu saldo actual en USDT.
+  - El precio actual del Bitcoin.
+  - El RSI actual de 1H.
+  - Una breve sugerencia o alerta visual basada en el nivel de RSI (ej. mercado estable vs. alerta de compra).
 
-```bash
-$ npm install
+### 💾 Persistencia de Datos e Historial
+- Cada operación queda registrada de forma permanente en una base de datos relacional **PostgreSQL** en la tabla `trading_operaciones`.
+- El bot registra el `ticker`, `precio_compra`, `precio_venta`, `monto_usdt`, el estado actual de la orden (`ABIERTA` / `CERRADA`), y la `ganancia_neta` obtenida en cada iteración.
+- Previene tener múltiples operaciones abiertas al mismo tiempo consultando la base de datos antes de comprar.
+
+## 🛠️ Stack Tecnológico
+
+- **[NestJS](https://nestjs.com/)**: Framework escalable para el backend en Node.js.
+- **[@binance/connector-typescript](https://github.com/binance/binance-connector-typescript)**: Integración oficial y tipada para la API Spot de Binance.
+- **[Telegraf](https://telegraf.js.org/)**: SDK moderno para la creación de bots de Telegram en Node.js.
+- **[TechnicalIndicators](https://github.com/anandanand84/technicalindicators)**: Paquete para el cálculo matemático del indicador financiero RSI.
+- **[PostgreSQL (pg)](https://node-postgres.com/)**: Motor de base de datos relacional para guardar operaciones de forma segura.
+- **Docker & Docker Compose**: Contenerización lista para entornos de producción.
+
+## ⚙️ Configuración (Variables de Entorno)
+
+Para poner en marcha el bot, se deben definir las siguientes variables en un archivo `.env` en la raíz del proyecto:
+
+```env
+# Configuración de Base de Datos PostgreSQL
+DB_HOST=localhost
+DB_USER=tu_usuario_db
+DB_PASSWORD=tu_password_db
+DB_NAME=db_gastos
+
+# Claves de la API de Binance (necesitan permisos de Spot Trading habilitados)
+BINANCE_API_KEY=tu_api_key_de_binance
+BINANCE_SECRET_KEY=tu_secret_key_de_binance
+
+# Credenciales de Telegram
+TELEGRAM_TOKEN=tu_token_del_bot_de_telegram
+TELEGRAM_CHAT_ID=tu_chat_id_donde_el_bot_enviara_mensajes
 ```
 
-## Compile and run the project
+## 🐳 Despliegue en Producción (Docker)
 
+El repositorio incluye un `Dockerfile` y un `docker-compose.yml` listos para ser desplegados. Una característica de la configuración actual en Compose es que el bot (`bot-trading`) se adhiere directamente a la red de un contenedor de Postgres existente llamado `postgres_prod` (`network_mode: 'container:postgres_prod'`), lo que permite conectarse a la DB como si fuera local (`localhost`).
+
+Para levantar el bot en un entorno de producción (en segundo plano):
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+docker-compose up -d --build
 ```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
