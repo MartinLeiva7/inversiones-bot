@@ -2,10 +2,9 @@ services:
   bot-trading:
     build: .
     container_name: bot_trading_prod
-    network_mode: 'host' # <--- Usamos la red de la máquina directamente
     restart: always
     environment:
-      - DB_HOST=localhost # En modo host, la DB está en "localhost"
+      - DB_HOST=postgres_prod # Usamos el nombre del contenedor de la DB
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
@@ -13,7 +12,14 @@ services:
       - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    networks:
+      - mi_red_compartida
     deploy:
       resources:
         limits:
           memory: 256M
+
+networks:
+  mi_red_compartida:
+    external: true
+    name: telegram-bot_default
