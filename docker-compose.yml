@@ -2,9 +2,9 @@ services:
   bot-trading:
     build: .
     container_name: bot_trading_prod
-    restart: always
+    network_mode: 'host' # <--- ESTO ELIMINA EL AISLAMIENTO DE RED
     environment:
-      - DB_HOST=postgres_prod
+      - DB_HOST=localhost # Al estar en modo host, la DB es 'localhost'
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
