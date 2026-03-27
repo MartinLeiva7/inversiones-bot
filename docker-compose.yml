@@ -1,12 +1,26 @@
 services:
+  # Agregamos la DB aquí para que sea el motor central
+  db:
+    image: postgres:15
+    container_name: postgres_prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data # <--- ESTO PROTEGE TUS DATOS
+    ports:
+      - '5432:5432'
+
   bot-trading:
     build: .
     container_name: bot_trading_prod
     restart: always
-    # ESTA ES LA CLAVE: Se pega al contenedor de la DB como si fuera uno solo
-    network_mode: 'container:postgres_prod'
+    depends_on:
+      - db
     environment:
-      - DB_HOST=localhost # Al estar pegado al contenedor, la DB es localhost
+      - DB_HOST=db # Ahora usamos el nombre del servicio
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME}
