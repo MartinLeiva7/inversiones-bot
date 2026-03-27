@@ -80,18 +80,20 @@ export class TradingService implements OnModuleInit {
         const stats = res.rows[0];
 
         // 3. Ver si hay algo abierto ahora
-        const abierta = await this.db.query(
-          "SELECT * FROM trading_operaciones WHERE estado = 'ABIERTA' LIMIT 1",
+        const abiertas = await this.db.query(
+          "SELECT * FROM trading_operaciones WHERE estado = 'ABIERTA' ORDER BY fecha_compra DESC",
         );
-        const pos = abierta.rows[0];
 
         let mensaje = `📊 *ESTADO DEL BOT*\n\n`;
         mensaje += `💰 *Saldo Spot:* ${saldoUSDT.toFixed(2)} USDT\n`;
         mensaje += `📈 *Trades Cerrados:* ${stats.total || 0}\n`;
         mensaje += `💵 *Ganancia Total:* ${parseFloat(stats.ganancia || 0).toFixed(2)} USDT\n\n`;
 
-        if (pos) {
-          mensaje += `⏳ *Posición Abierta:* BTC comprada a $${pos.precio_compra}\n`;
+        if (abiertas.rows.length > 0) {
+          mensaje += `⏳ *Posiciones Abiertas (${abiertas.rows.length}):*\n`;
+          abiertas.rows.forEach((pos, index) => {
+            mensaje += `${index + 1}. BTC a $${parseFloat(pos.precio_compra).toLocaleString()}\n`;
+          });
         } else {
           mensaje += `😴 *Estado:* Esperando oportunidad (RSI)...`;
         }
@@ -137,7 +139,9 @@ export class TradingService implements OnModuleInit {
   }
 
   async analizarMercado() {
-    const MONTO_OPERACION = 15; // De tus 88 USDT, usamos 15 por vez
+    const MONTO_OPERACION = 15;
+    const MAX_POSICIONES = 3; // Límite para no quedarnos sin USDT
+
     try {
       const candles = await this.binance.klineCandlestickData(
         'BTCUSDT',
@@ -146,38 +150,42 @@ export class TradingService implements OnModuleInit {
       );
       const closingPrices = candles.map((c) => parseFloat(c[4] as string));
       const precioActual = closingPrices[closingPrices.length - 1];
-
       const rsiValues = RSI.calculate({ values: closingPrices, period: 14 });
       const rsiActual = rsiValues[rsiValues.length - 1];
 
-      // Verificar en DB si hay posición abierta
+      // Traer TODAS las posiciones abiertas
       const res = await this.db.query(
         "SELECT * FROM trading_operaciones WHERE ticker = 'BTCUSDT' AND estado = 'ABIERTA'",
       );
-      const operacionAbierta = res.rows[0];
+      const operacionesAbiertas = res.rows;
 
       this.logger.log(
-        `BTC: $${precioActual} | RSI: ${rsiActual.toFixed(2)} | Posición: ${operacionAbierta ? 'SÍ' : 'NO'}`,
+        `BTC: $${precioActual} | RSI: ${rsiActual.toFixed(2)} | Posiciones abiertas: ${operacionesAbiertas.length}`,
       );
 
-      // LÓGICA DE COMPRA
-      if (!operacionAbierta && rsiActual < 35) {
+      // LÓGICA DE COMPRA (Solo si tenemos menos del máximo permitido)
+      if (operacionesAbiertas.length < MAX_POSICIONES && rsiActual < 35) {
         const saldo = await this.obtenerSaldoUSDT();
         if (saldo >= MONTO_OPERACION) {
-          await this.ejecutarCompraReal('BTCUSDT', MONTO_OPERACION);
-        } else {
-          this.logger.warn(`Saldo insuficiente (${saldo} USDT) para comprar.`);
+          await this.ejecutarCompraReal(
+            'BTCUSDT',
+            MONTO_OPERACION,
+            precioActual,
+          );
         }
       }
 
-      // LÓGICA DE VENTA
-      if (operacionAbierta) {
-        const precioCompra = parseFloat(operacionAbierta.precio_compra);
+      // LÓGICA DE VENTA (Iteramos por cada posición abierta)
+      for (const op of operacionesAbiertas) {
+        const precioCompra = parseFloat(op.precio_compra);
         const ganancia = ((precioActual - precioCompra) / precioCompra) * 100;
 
         if (rsiActual > 65 || ganancia >= 2.0) {
+          this.logger.log(
+            `¡Objetivo alcanzado para posición ID ${op.id}! Ganancia: ${ganancia.toFixed(2)}%`,
+          );
           await this.ejecutarVentaReal(
-            operacionAbierta.id,
+            op.id,
             'BTCUSDT',
             precioActual,
             ganancia,
@@ -189,9 +197,12 @@ export class TradingService implements OnModuleInit {
     }
   }
 
-  async ejecutarCompraReal(ticker: string, montoUSDT: number) {
+  async ejecutarCompraReal(
+    ticker: string,
+    montoUSDT: number,
+    precioActual: number,
+  ) {
     try {
-      // Cambiamos 'BUY' por Side.BUY y 'MARKET' por OrderType.MARKET
       const order = await this.binance.newOrder(
         ticker,
         Side.BUY,
@@ -201,25 +212,23 @@ export class TradingService implements OnModuleInit {
         },
       );
 
-      // Validamos que existan los fills para que TS no tire error
-      if (!order.fills || order.fills.length === 0) {
-        throw new Error(
-          'La orden se ejecutó pero no hay detalles de precio (fills)',
-        );
-      }
-
-      const precioEjecucion = parseFloat(order.fills[0].price);
+      // Si no hay fills, usamos el precioActual que pasamos por parámetro
+      const precioEjecucion =
+        order.fills && order.fills.length > 0
+          ? parseFloat(order.fills[0].price)
+          : precioActual;
 
       await this.db.query(
-        `INSERT INTO trading_operaciones (ticker, precio_compra, monto_usdt, estado) VALUES ($1, $2, $3, 'ABIERTA')`,
+        `INSERT INTO trading_operaciones (ticker, precio_compra, monto_usdt, estado, fecha_compra) VALUES ($1, $2, $3, 'ABIERTA', NOW())`,
         [ticker, precioEjecucion, montoUSDT],
       );
 
       await this.notificar(
-        `🛒 COMPRA: BTC a $${precioEjecucion}\nRSI: ${montoUSDT} USDT invertidos.`,
+        `🛒 COMPRA REAL: BTC a $${precioEjecucion}\nInvertidos: ${montoUSDT} USDT`,
       );
     } catch (error) {
-      this.logger.error('Fallo Compra:', error.message);
+      this.logger.error('Fallo Compra Real:', error.message);
+      await this.notificar(`❌ ERROR EN COMPRA: ${error.message}`);
     }
   }
 
