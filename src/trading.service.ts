@@ -181,15 +181,14 @@ export class TradingService implements OnModuleInit {
         const ganancia = ((precioActual - precioCompra) / precioCompra) * 100;
 
         if (rsiActual > 65 || ganancia >= 2.0) {
-          this.logger.log(
-            `¡Objetivo alcanzado para posición ID ${op.id}! Ganancia: ${ganancia.toFixed(2)}%`,
-          );
           await this.ejecutarVentaReal(
             op.id,
             'BTCUSDT',
             precioActual,
             ganancia,
           );
+          // Esperamos 2 segundos antes de procesar la siguiente posición
+          await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
     } catch (error) {
@@ -241,35 +240,54 @@ export class TradingService implements OnModuleInit {
     try {
       const account = await this.binance.accountInformation();
       const btcBalance = account.balances.find((b) => b.asset === 'BTC');
-      const cantidadAVender = parseFloat(btcBalance?.free || '0');
+      const cantidadTotal = parseFloat(btcBalance?.free || '0');
 
-      // Cambiamos 'SELL' por Side.SELL y 'MARKET' por OrderType.MARKET
+      // 1. Calculamos el valor en USDT para no chocar con el mínimo de Binance (10-11 USDT)
+      const valorEnUSDT = cantidadTotal * precioActual;
+
+      if (valorEnUSDT < 11) {
+        this.logger.warn(
+          `Saldo insuficiente para vender en Binance (${valorEnUSDT.toFixed(2)} USDT). Limpiando DB...`,
+        );
+        await this.db.query(
+          `UPDATE trading_operaciones SET estado = 'CERRADA' WHERE id = $1`,
+          [id],
+        );
+        return;
+      }
+
+      // 2. Ejecutamos la venta del TOTAL del BTC disponible
       const order = await this.binance.newOrder(
         ticker,
         Side.SELL,
         OrderType.MARKET,
         {
-          quantity: cantidadAVender,
+          quantity: cantidadTotal,
         },
       );
 
-      if (!order.fills || order.fills.length === 0) {
-        throw new Error('Venta ejecutada sin detalles de precio');
-      }
+      const precioVenta =
+        order.fills && order.fills.length > 0
+          ? parseFloat(order.fills[0].price)
+          : precioActual;
 
-      const precioVenta = parseFloat(order.fills[0].price);
-
-      // 3. Actualizar DB
+      // 3. Marcamos TODAS las posiciones como cerradas porque liquidamos el 100% del BTC
       await this.db.query(
-        `UPDATE trading_operaciones SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' WHERE id = $3`,
-        [precioVenta, ganancia, id],
+        `UPDATE trading_operaciones SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' WHERE estado = 'ABIERTA'`,
+        [precioVenta, ganancia],
       );
 
       await this.notificar(
-        `💰 VENTA: BTC a $${precioVenta}\nGanancia: ${ganancia.toFixed(2)}%`,
+        `💰 VENTA TOTAL EXITOSA: BTC a $${precioVenta}\nSaldo recuperado en USDT.`,
       );
     } catch (error) {
-      this.logger.error('Fallo Venta:', error.message);
+      this.logger.error(`Fallo Venta: ${error.message}`);
+      // Si Binance dice que no hay saldo, limpiamos la DB igual
+      if (error.message.includes('account has insufficient balance')) {
+        await this.db.query(
+          "UPDATE trading_operaciones SET estado = 'CERRADA' WHERE estado = 'ABIERTA'",
+        );
+      }
     }
   }
 
