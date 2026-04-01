@@ -255,13 +255,18 @@ export class TradingService implements OnModuleInit {
         return;
       }
 
-      // 2. Ejecutamos la venta
+      // 2. Ejecutamos la venta del TOTAL del BTC disponible
+      // Usamos .toFixed(5) para no enviar demasiados decimales a Binance
+      const cantidadTruncada = cantidadTotal.toFixed(5);
+
+      this.logger.log(`Intentando vender ${cantidadTruncada} BTC...`);
+
       const order = await this.binance.newOrder(
         ticker,
         Side.SELL,
         OrderType.MARKET,
         {
-          quantity: cantidadTotal,
+          quantity: parseFloat(cantidadTruncada),
         },
       );
 
