@@ -241,13 +241,12 @@ export class TradingService implements OnModuleInit {
       const account = await this.binance.accountInformation();
       const btcBalance = account.balances.find((b) => b.asset === 'BTC');
       const cantidadTotal = parseFloat(btcBalance?.free || '0');
-
-      // 1. Calculamos el valor en USDT para no chocar con el mínimo de Binance (10-11 USDT)
       const valorEnUSDT = cantidadTotal * precioActual;
 
-      if (valorEnUSDT < 11) {
+      // 1. Si no hay prácticamente nada de BTC, cerramos la posición en DB y salimos
+      if (valorEnUSDT < 2) {
         this.logger.warn(
-          `Saldo insuficiente para vender en Binance (${valorEnUSDT.toFixed(2)} USDT). Limpiando DB...`,
+          `Saldo de BTC insignificante (${valorEnUSDT.toFixed(2)} USDT). Limpiando registro ID ${id}.`,
         );
         await this.db.query(
           `UPDATE trading_operaciones SET estado = 'CERRADA' WHERE id = $1`,
@@ -256,7 +255,7 @@ export class TradingService implements OnModuleInit {
         return;
       }
 
-      // 2. Ejecutamos la venta del TOTAL del BTC disponible
+      // 2. Ejecutamos la venta
       const order = await this.binance.newOrder(
         ticker,
         Side.SELL,
@@ -271,7 +270,6 @@ export class TradingService implements OnModuleInit {
           ? parseFloat(order.fills[0].price)
           : precioActual;
 
-      // 3. Marcamos TODAS las posiciones como cerradas porque liquidamos el 100% del BTC
       await this.db.query(
         `UPDATE trading_operaciones SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' WHERE estado = 'ABIERTA'`,
         [precioVenta, ganancia],
@@ -281,9 +279,14 @@ export class TradingService implements OnModuleInit {
         `💰 VENTA TOTAL EXITOSA: BTC a $${precioVenta}\nSaldo recuperado en USDT.`,
       );
     } catch (error) {
-      this.logger.error(`Fallo Venta: ${error.message}`);
-      // Si Binance dice que no hay saldo, limpiamos la DB igual
-      if (error.message.includes('account has insufficient balance')) {
+      const errorMsg = error?.message || 'Error desconocido'; // <--- PROTECCIÓN AQUÍ
+      this.logger.error(`Fallo Venta: ${errorMsg}`);
+
+      // Si no hay saldo, limpiamos la DB para que no reintente eternamente
+      if (
+        errorMsg.includes('account has insufficient balance') ||
+        errorMsg.includes('insufficient balance')
+      ) {
         await this.db.query(
           "UPDATE trading_operaciones SET estado = 'CERRADA' WHERE estado = 'ABIERTA'",
         );
