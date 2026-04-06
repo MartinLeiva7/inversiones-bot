@@ -139,7 +139,7 @@ export class TradingService implements OnModuleInit {
   }
 
   async analizarMercado() {
-    const MONTO_OPERACION = 15;
+    const MONTO_OPERACION = 25;
     const MAX_POSICIONES = 3; // Límite para no quedarnos sin USDT
 
     try {
