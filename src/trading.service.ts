@@ -70,38 +70,48 @@ export class TradingService implements OnModuleInit {
   private configurarComandos() {
     this.bot.command('status', async (ctx) => {
       try {
-        // 1. Consultar saldo real en Binance
+        // 1. Obtener datos de mercado en tiempo real
+        const precioBTC = await this.obtenerPrecioActualBTC();
+        const rsiActual = await this.calcularRSICuandoSea();
         const saldoUSDT = await this.obtenerSaldoUSDT();
 
-        // 2. Consultar operaciones en la DB
+        // 2. Consultar estadísticas de la DB
         const res = await this.db.query(
           "SELECT COUNT(*) as total, SUM(ganancia_neta) as ganancia FROM trading_operaciones WHERE estado = 'CERRADA'",
         );
         const stats = res.rows[0];
 
-        // 3. Ver si hay algo abierto ahora
+        // 3. Ver posiciones abiertas
         const abiertas = await this.db.query(
           "SELECT * FROM trading_operaciones WHERE estado = 'ABIERTA' ORDER BY fecha_compra DESC",
         );
 
-        let mensaje = `📊 *ESTADO DEL BOT*\n\n`;
+        // 4. Armar el mensaje súper completo
+        let mensaje = `📊 *ESTADO DEL BOT EN VIVO*\n`;
+        mensaje += `⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n`;
+        mensaje += `₿ *BTC:* $${precioBTC.toLocaleString()}  |  📊 *RSI:* ${rsiActual.toFixed(2)}\n`;
         mensaje += `💰 *Saldo Spot:* ${saldoUSDT.toFixed(2)} USDT\n`;
+        mensaje += `⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n`;
         mensaje += `📈 *Trades Cerrados:* ${stats.total || 0}\n`;
         mensaje += `💵 *Ganancia Total:* ${parseFloat(stats.ganancia || 0).toFixed(2)} USDT\n\n`;
 
         if (abiertas.rows.length > 0) {
           mensaje += `⏳ *Posiciones Abiertas (${abiertas.rows.length}):*\n`;
           abiertas.rows.forEach((pos, index) => {
-            mensaje += `${index + 1}. BTC a $${parseFloat(pos.precio_compra).toLocaleString()}\n`;
+            const pCompra = parseFloat(pos.precio_compra);
+            const diff = ((precioBTC - pCompra) / pCompra) * 100;
+            const emoji = diff >= 0 ? '✅' : '🔻';
+
+            mensaje += `${index + 1}. $${pCompra.toLocaleString()} (${emoji} ${diff.toFixed(2)}%)\n`;
           });
         } else {
-          mensaje += `😴 *Estado:* Esperando oportunidad (RSI)...`;
+          mensaje += `😴 *Estado:* Esperando RSI < 35 para comprar.`;
         }
 
         await ctx.replyWithMarkdown(mensaje);
       } catch (error) {
         this.logger.error('Error en comando status:', error.message);
-        await ctx.reply('❌ Error al obtener el estado.');
+        await ctx.reply('❌ Error al obtener el estado completo.');
       }
     });
 
