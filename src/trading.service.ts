@@ -265,9 +265,8 @@ export class TradingService implements OnModuleInit {
         return;
       }
 
-      // 2. Ejecutamos la venta del TOTAL del BTC disponible
-      // Usamos .toFixed(5) para no enviar demasiados decimales a Binance
-      const cantidadTruncada = cantidadTotal.toFixed(5);
+      // 2. Truncamos a 4 decimales para asegurar compatibilidad total con el Lot Size de BTC
+      const cantidadTruncada = Math.floor(cantidadTotal * 10000) / 10000;
 
       this.logger.log(`Intentando vender ${cantidadTruncada} BTC...`);
 
@@ -276,7 +275,8 @@ export class TradingService implements OnModuleInit {
         Side.SELL,
         OrderType.MARKET,
         {
-          quantity: parseFloat(cantidadTruncada),
+          quantity: cantidadTruncada,
+          recvWindow: 10000, // Le damos 10 segundos de margen de sincronización
         },
       );
 
