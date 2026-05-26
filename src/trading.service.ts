@@ -190,7 +190,7 @@ export class TradingService implements OnModuleInit {
         const precioCompra = parseFloat(op.precio_compra);
         const ganancia = ((precioActual - precioCompra) / precioCompra) * 100;
 
-        if (rsiActual > 65 || ganancia >= 2.0) {
+        if (ganancia >= 2.0 || (rsiActual > 65 && ganancia > 0)) {
           await this.ejecutarVentaReal(
             op.id,
             'BTCUSDT',
@@ -265,7 +265,8 @@ export class TradingService implements OnModuleInit {
         return;
       }
 
-      // 2. Truncamos a 4 decimales para asegurar compatibilidad total con el Lot Size de BTC
+      // 2. Ejecutamos la venta del TOTAL del BTC disponible
+      // Usamos truncado a 4 decimales para asegurar compatibilidad total con el Lot Size de BTC
       const cantidadTruncada = Math.floor(cantidadTotal * 10000) / 10000;
 
       this.logger.log(`Intentando vender ${cantidadTruncada} BTC...`);
@@ -276,7 +277,7 @@ export class TradingService implements OnModuleInit {
         OrderType.MARKET,
         {
           quantity: cantidadTruncada,
-          recvWindow: 10000, // Le damos 10 segundos de margen de sincronización
+          recvWindow: 10000, // Margen de sincronización de tiempo
         },
       );
 
@@ -285,16 +286,32 @@ export class TradingService implements OnModuleInit {
           ? parseFloat(order.fills[0].price)
           : precioActual;
 
-      await this.db.query(
-        `UPDATE trading_operaciones SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' WHERE estado = 'ABIERTA'`,
-        [precioVenta, ganancia],
+      // --- [NUEVA LÓGICA DEL AJUSTE 2] ---
+      // Traemos todas las posiciones que están abiertas para cerrarlas calculando su profit real e individual
+      const resAbiertas = await this.db.query(
+        "SELECT id, precio_compra FROM trading_operaciones WHERE estado = 'ABIERTA'",
       );
+
+      for (const row of resAbiertas.rows) {
+        const pCompraIndividual = parseFloat(row.precio_compra);
+        // Calculamos la ganancia neta real para esta orden específica
+        const gananciaRealIndividual =
+          ((precioVenta - pCompraIndividual) / pCompraIndividual) * 100;
+
+        await this.db.query(
+          `UPDATE trading_operaciones 
+           SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' 
+           WHERE id = $3`,
+          [precioVenta, gananciaRealIndividual, row.id],
+        );
+      }
+      // ------------------------------------
 
       await this.notificar(
         `💰 VENTA TOTAL EXITOSA: BTC a $${precioVenta}\nSaldo recuperado en USDT.`,
       );
     } catch (error) {
-      const errorMsg = error?.message || 'Error desconocido'; // <--- PROTECCIÓN AQUÍ
+      const errorMsg = error?.message || 'Error desconocido';
       this.logger.error(`Fallo Venta: ${errorMsg}`);
 
       // Si no hay saldo, limpiamos la DB para que no reintente eternamente
