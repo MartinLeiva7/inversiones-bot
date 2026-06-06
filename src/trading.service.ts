@@ -155,7 +155,7 @@ export class TradingService implements OnModuleInit {
           await ctx.replyWithMarkdown(
             `💰 *Saldo Spot disponible:* ${saldoUSDT.toFixed(2)} USDT\n\n` +
               `Para realizar una compra manual de BTC, usa el formato:\n` +
-              `/comprar <monto_usdt>\n` +
+              `\`/comprar <monto_usdt>\`\n` +
               `Ejemplo: \`/comprar 25\``,
           );
           return;
