@@ -1,10 +1,21 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Spot, Interval, Side, OrderType } from '@binance/connector-typescript';
-import { RSI } from 'technicalindicators';
+import { RSI, MACD } from 'technicalindicators';
 import { Client } from 'pg';
 import { Cron, CronExpression } from '@nestjs/schedule'; // Agregamos Cron
 import axios from 'axios';
 import { Telegraf } from 'telegraf';
+
+interface TradingOperacion {
+  id: number;
+  ticker: string;
+  precio_compra: string;
+  precio_venta: string | null;
+  monto_usdt: string;
+  estado: string;
+  fecha_compra: Date;
+  ganancia_neta: string | null;
+}
 
 @Injectable()
 export class TradingService implements OnModuleInit {
@@ -52,7 +63,7 @@ export class TradingService implements OnModuleInit {
       // IMPORTANTE: Arrancamos el bot de Telegram ANTES que la DB
       // Así, si la DB falla, el bot al menos puede responderte un error.
       this.configurarComandos();
-      this.bot.launch();
+      void this.bot.launch();
       this.logger.log('✅ Bot de Telegram lanzado (Polling activo)');
 
       this.logger.log('⏳ Intentando conectar a la base de datos...');
@@ -62,7 +73,8 @@ export class TradingService implements OnModuleInit {
       // Ver saldo inicial
       await this.obtenerSaldoReal();
     } catch (err) {
-      this.logger.error(`❌ Error crítico en inicio: ${err.message}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`❌ Error crítico en inicio: ${errMsg}`);
       // No cortamos el flujo aquí para que el bot de TG siga vivo si pudo arrancar
     }
   }
@@ -76,13 +88,16 @@ export class TradingService implements OnModuleInit {
         const saldoUSDT = await this.obtenerSaldoUSDT();
 
         // 2. Consultar estadísticas de la DB
-        const res = await this.db.query(
+        const res = await this.db.query<{
+          total: string;
+          ganancia: string | null;
+        }>(
           "SELECT COUNT(*) as total, SUM(ganancia_neta) as ganancia FROM trading_operaciones WHERE estado = 'CERRADA'",
         );
-        const stats = res.rows[0];
+        const stats = res.rows[0] || { total: '0', ganancia: '0' };
 
         // 3. Ver posiciones abiertas
-        const abiertas = await this.db.query(
+        const abiertas = await this.db.query<TradingOperacion>(
           "SELECT * FROM trading_operaciones WHERE estado = 'ABIERTA' ORDER BY fecha_compra DESC",
         );
 
@@ -93,7 +108,7 @@ export class TradingService implements OnModuleInit {
         mensaje += `💰 *Saldo Spot:* ${saldoUSDT.toFixed(2)} USDT\n`;
         mensaje += `⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n`;
         mensaje += `📈 *Trades Cerrados:* ${stats.total || 0}\n`;
-        mensaje += `💵 *Ganancia Total:* ${parseFloat(stats.ganancia || 0).toFixed(2)} USDT\n\n`;
+        mensaje += `💵 *Ganancia Total:* ${parseFloat(stats.ganancia || '0').toFixed(2)} USDT\n\n`;
 
         if (abiertas.rows.length > 0) {
           mensaje += `⏳ *Posiciones Abiertas (${abiertas.rows.length}):*\n`;
@@ -110,7 +125,8 @@ export class TradingService implements OnModuleInit {
 
         await ctx.replyWithMarkdown(mensaje);
       } catch (error) {
-        this.logger.error('Error en comando status:', error.message);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.error('Error en comando status:', errMsg);
         await ctx.reply('❌ Error al obtener el estado completo.');
       }
     });
@@ -127,6 +143,58 @@ export class TradingService implements OnModuleInit {
       const rsiActual = rsiValues[rsiValues.length - 1];
       await ctx.reply(`📊 RSI Actual de BTC (1h): ${rsiActual.toFixed(2)}`);
     });
+
+    // Nuevo comando para comprar BTC a partir de un monto manual en USDT
+    this.bot.command(['comprar', 'buy'], async (ctx) => {
+      try {
+        const mensaje = ctx.message.text.trim();
+        const partes = mensaje.split(/\s+/);
+
+        if (partes.length < 2) {
+          const saldoUSDT = await this.obtenerSaldoUSDT();
+          await ctx.replyWithMarkdown(
+            `💰 *Saldo Spot disponible:* ${saldoUSDT.toFixed(2)} USDT\n\n` +
+              `Para realizar una compra manual de BTC, usa el formato:\n` +
+              `/comprar <monto_usdt>\n` +
+              `Ejemplo: \`/comprar 25\``,
+          );
+          return;
+        }
+
+        const montoStr = partes[1].replace(',', '.');
+        const montoUSDT = parseFloat(montoStr);
+
+        if (isNaN(montoUSDT) || montoUSDT <= 0) {
+          await ctx.reply(
+            '❌ El monto ingresado no es válido. Debe ser un número mayor a 0.',
+          );
+          return;
+        }
+
+        const saldoUSDT = await this.obtenerSaldoUSDT();
+        if (montoUSDT > saldoUSDT) {
+          await ctx.reply(
+            `❌ Saldo insuficiente. Tenés *${saldoUSDT.toFixed(2)} USDT* disponibles y querés comprar *${montoUSDT.toFixed(2)} USDT*.`,
+            { parse_mode: 'Markdown' },
+          );
+          return;
+        }
+
+        await ctx.reply(
+          `⏳ Iniciando compra manual de BTC por *${montoUSDT.toFixed(2)} USDT*...`,
+          {
+            parse_mode: 'Markdown',
+          },
+        );
+
+        const precioActual = await this.obtenerPrecioActualBTC();
+        await this.ejecutarCompraReal('BTCUSDT', montoUSDT, precioActual);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.error('Error en comando comprar/buy:', errMsg);
+        await ctx.reply(`❌ Error al ejecutar el comando de compra: ${errMsg}`);
+      }
+    });
   }
 
   // MÉTODO NUEVO: Para saber cuánto efectivo tenés realmente
@@ -135,7 +203,7 @@ export class TradingService implements OnModuleInit {
       const account = await this.binance.accountInformation();
       const usdt = account.balances.find((b) => b.asset === 'USDT');
       return parseFloat(usdt?.free || '0');
-    } catch (error) {
+    } catch {
       this.logger.error('Error obteniendo saldo USDT');
       return 0;
     }
@@ -160,21 +228,59 @@ export class TradingService implements OnModuleInit {
       );
       const closingPrices = candles.map((c) => parseFloat(c[4] as string));
       const precioActual = closingPrices[closingPrices.length - 1];
+
+      // Cálculo de RSI
       const rsiValues = RSI.calculate({ values: closingPrices, period: 14 });
       const rsiActual = rsiValues[rsiValues.length - 1];
 
+      // Cálculo de MACD
+      const macdValues = MACD.calculate({
+        values: closingPrices,
+        fastPeriod: 12,
+        slowPeriod: 26,
+        signalPeriod: 9,
+        SimpleMAOscillator: false,
+        SimpleMASignal: false,
+      });
+      const macdActual = macdValues[macdValues.length - 1];
+      const macdPrev = macdValues[macdValues.length - 2];
+
+      const histogramActual = macdActual?.histogram ?? 0;
+      const histogramPrev = macdPrev?.histogram ?? 0;
+
+      // Momentum alcista: el histograma está subiendo
+      const momentumBullish = histogramActual > histogramPrev;
+
       // Traer TODAS las posiciones abiertas
-      const res = await this.db.query(
+      const res = await this.db.query<TradingOperacion>(
         "SELECT * FROM trading_operaciones WHERE ticker = 'BTCUSDT' AND estado = 'ABIERTA'",
       );
       const operacionesAbiertas = res.rows;
 
       this.logger.log(
-        `BTC: $${precioActual} | RSI: ${rsiActual.toFixed(2)} | Posiciones abiertas: ${operacionesAbiertas.length}`,
+        `BTC: $${precioActual} | RSI: ${rsiActual.toFixed(2)} | MACD Hist: ${histogramActual.toFixed(4)} (Prev: ${histogramPrev.toFixed(4)}) | Posiciones abiertas: ${operacionesAbiertas.length}`,
       );
 
       // LÓGICA DE COMPRA (Solo si tenemos menos del máximo permitido)
-      if (operacionesAbiertas.length < MAX_POSICIONES && rsiActual < 35) {
+      let puedeComprar = operacionesAbiertas.length < MAX_POSICIONES;
+
+      // Validar Grid Step (mínimo 5% de caída respecto al precio mínimo de las posiciones abiertas)
+      if (puedeComprar && operacionesAbiertas.length > 0) {
+        const precioMinCompra = Math.min(
+          ...operacionesAbiertas.map((op) => parseFloat(op.precio_compra)),
+        );
+        const dropPercentage =
+          ((precioMinCompra - precioActual) / precioMinCompra) * 100;
+
+        if (dropPercentage < 5.0) {
+          puedeComprar = false;
+          this.logger.log(
+            `Compra cancelada por Grid Step. Precio actual: $${precioActual}, Precio mínimo de compra: $${precioMinCompra} (Caída: ${dropPercentage.toFixed(2)}% < 5%)`,
+          );
+        }
+      }
+
+      if (puedeComprar && rsiActual < 35 && momentumBullish) {
         const saldo = await this.obtenerSaldoUSDT();
         if (saldo >= MONTO_OPERACION) {
           await this.ejecutarCompraReal(
@@ -185,7 +291,7 @@ export class TradingService implements OnModuleInit {
         }
       }
 
-      // LÓGICA DE VENTA (Iteramos por cada posición abierta)
+      // LÓGICA DE VENTA (Iteramos por cada posición abierta y gestionamos de forma individual)
       for (const op of operacionesAbiertas) {
         const precioCompra = parseFloat(op.precio_compra);
         const ganancia = ((precioActual - precioCompra) / precioCompra) * 100;
@@ -196,13 +302,16 @@ export class TradingService implements OnModuleInit {
             'BTCUSDT',
             precioActual,
             ganancia,
+            parseFloat(op.monto_usdt),
+            precioCompra,
           );
           // Esperamos 2 segundos antes de procesar la siguiente posición
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
     } catch (error) {
-      this.logger.error('Error en analizarMercado:', error.message);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('Error en analizarMercado:', errMsg);
     }
   }
 
@@ -236,8 +345,9 @@ export class TradingService implements OnModuleInit {
         `🛒 COMPRA REAL: BTC a $${precioEjecucion}\nInvertidos: ${montoUSDT} USDT`,
       );
     } catch (error) {
-      this.logger.error('Fallo Compra Real:', error.message);
-      await this.notificar(`❌ ERROR EN COMPRA: ${error.message}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error('Fallo Compra Real:', errMsg);
+      await this.notificar(`❌ ERROR EN COMPRA: ${errMsg}`);
     }
   }
 
@@ -246,30 +356,35 @@ export class TradingService implements OnModuleInit {
     ticker: string,
     precioActual: number,
     ganancia: number,
+    montoUSDT: number,
+    precioCompra: number,
   ) {
     try {
+      const cantidadCalculada = montoUSDT / precioCompra;
       const account = await this.binance.accountInformation();
       const btcBalance = account.balances.find((b) => b.asset === 'BTC');
-      const cantidadTotal = parseFloat(btcBalance?.free || '0');
-      const valorEnUSDT = cantidadTotal * precioActual;
+      const cantidadDisponible = parseFloat(btcBalance?.free || '0');
 
-      // 1. Si no hay prácticamente nada de BTC, cerramos la posición en DB y salimos
+      // Vender el menor valor entre el calculado y el disponible realmente
+      const cantidadAVender = Math.min(cantidadCalculada, cantidadDisponible);
+      const cantidadTruncada = Math.floor(cantidadAVender * 10000) / 10000;
+      const valorEnUSDT = cantidadTruncada * precioActual;
+
+      // 1. Si no hay prácticamente nada de BTC o el valor es insignificante, cerramos en la DB y salimos
       if (valorEnUSDT < 2) {
         this.logger.warn(
-          `Saldo de BTC insignificante (${valorEnUSDT.toFixed(2)} USDT). Limpiando registro ID ${id}.`,
+          `Saldo de BTC insignificante (${valorEnUSDT.toFixed(2)} USDT) para la posición ID ${id}. Limpiando registro.`,
         );
         await this.db.query(
-          `UPDATE trading_operaciones SET estado = 'CERRADA' WHERE id = $1`,
-          [id],
+          `UPDATE trading_operaciones SET estado = 'CERRADA', precio_venta = $1, ganancia_neta = $2 WHERE id = $3`,
+          [precioActual, ganancia, id],
         );
         return;
       }
 
-      // 2. Ejecutamos la venta del TOTAL del BTC disponible
-      // Usamos truncado a 4 decimales para asegurar compatibilidad total con el Lot Size de BTC
-      const cantidadTruncada = Math.floor(cantidadTotal * 10000) / 10000;
-
-      this.logger.log(`Intentando vender ${cantidadTruncada} BTC...`);
+      this.logger.log(
+        `Intentando vender ${cantidadTruncada} BTC para la posición ID ${id}...`,
+      );
 
       const order = await this.binance.newOrder(
         ticker,
@@ -286,41 +401,34 @@ export class TradingService implements OnModuleInit {
           ? parseFloat(order.fills[0].price)
           : precioActual;
 
-      // --- [NUEVA LÓGICA DEL AJUSTE 2] ---
-      // Traemos todas las posiciones que están abiertas para cerrarlas calculando su profit real e individual
-      const resAbiertas = await this.db.query(
-        "SELECT id, precio_compra FROM trading_operaciones WHERE estado = 'ABIERTA'",
+      const gananciaReal = ((precioVenta - precioCompra) / precioCompra) * 100;
+
+      // Actualizamos únicamente la posición correspondiente a este ID
+      await this.db.query(
+        `UPDATE trading_operaciones 
+         SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' 
+         WHERE id = $3`,
+        [precioVenta, gananciaReal, id],
       );
-
-      for (const row of resAbiertas.rows) {
-        const pCompraIndividual = parseFloat(row.precio_compra);
-        // Calculamos la ganancia neta real para esta orden específica
-        const gananciaRealIndividual =
-          ((precioVenta - pCompraIndividual) / pCompraIndividual) * 100;
-
-        await this.db.query(
-          `UPDATE trading_operaciones 
-           SET precio_venta = $1, ganancia_neta = $2, estado = 'CERRADA' 
-           WHERE id = $3`,
-          [precioVenta, gananciaRealIndividual, row.id],
-        );
-      }
-      // ------------------------------------
 
       await this.notificar(
-        `💰 VENTA TOTAL EXITOSA: BTC a $${precioVenta}\nSaldo recuperado en USDT.`,
+        `💰 VENTA EXITOSA: BTC a $${precioVenta}\n` +
+          `Posición ID: ${id}\n` +
+          `Monto vendido: ~${(cantidadTruncada * precioVenta).toFixed(2)} USDT (${cantidadTruncada} BTC)\n` +
+          `Ganancia neta: ${gananciaReal.toFixed(2)}%`,
       );
     } catch (error) {
-      const errorMsg = error?.message || 'Error desconocido';
-      this.logger.error(`Fallo Venta: ${errorMsg}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Fallo Venta para posición ID ${id}: ${errorMsg}`);
 
-      // Si no hay saldo, limpiamos la DB para que no reintente eternamente
+      // Si no hay saldo, limpiamos este registro específico para que no intente eternamente
       if (
         errorMsg.includes('account has insufficient balance') ||
         errorMsg.includes('insufficient balance')
       ) {
         await this.db.query(
-          "UPDATE trading_operaciones SET estado = 'CERRADA' WHERE estado = 'ABIERTA'",
+          "UPDATE trading_operaciones SET estado = 'CERRADA' WHERE id = $1",
+          [id],
         );
       }
     }
@@ -338,13 +446,12 @@ export class TradingService implements OnModuleInit {
   async obtenerSaldoReal() {
     try {
       const account = await this.binance.accountInformation();
-      const misSaldos = account.balances.filter(
-        (b) => parseFloat(b.free as string) > 0,
-      );
+      const misSaldos = account.balances.filter((b) => parseFloat(b.free) > 0);
       this.logger.log('--- 💰 SALDOS ACTUALES ---');
       misSaldos.forEach((s) => this.logger.log(`${s.asset}: ${s.free}`));
     } catch (e) {
-      this.logger.error(e.message);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      this.logger.error(errMsg);
     }
   }
 
@@ -352,8 +459,10 @@ export class TradingService implements OnModuleInit {
 
   async obtenerPrecioActualBTC(): Promise<number> {
     const ticker = await this.binance.symbolPriceTicker({ symbol: 'BTCUSDT' });
-    // @ts-expect-error (Binance connector a veces devuelve array o objeto dependiendo de la versión)
-    return parseFloat(ticker.price || ticker[0].price);
+    if (Array.isArray(ticker)) {
+      return parseFloat(ticker[0].price);
+    }
+    return parseFloat(ticker.price);
   }
 
   async calcularRSICuandoSea(): Promise<number> {
@@ -399,7 +508,8 @@ _Seguimos vigilando 24/7 desde Catamarca_ 🛡️`;
 
       this.logger.log('✅ Resumen diario enviado a Telegram');
     } catch (error) {
-      this.logger.error(`❌ Error en resumen diario: ${error.message}`);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Error en resumen diario: ${errMsg}`);
     }
   }
 }
